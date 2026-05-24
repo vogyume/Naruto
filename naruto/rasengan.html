@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>naruto - Double Hand Rasengan</title>
+  
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+
+  <style>
+    body { margin: 0; overflow: hidden; background-color: black; }
+    #v_src, #out {
+      position: absolute; top: 0; left: 0;
+      width: 100vw; height: 100vh;
+      object-fit: cover; transform: scaleX(-1);
+    }
+    #out { z-index: 2; pointer-events: none; }
+    .darkness {
+      position: absolute; top: 0; left: 0;
+      width: 100vw; height: 100vh;
+      background: rgba(10, 5, 0, 0.3);
+      mix-blend-mode: multiply; pointer-events: none; z-index: 5;
+    }
+    .fx {
+      position: absolute; height: auto; top: 0; left: 0;
+      transform: translate(-50%, -50%);
+      pointer-events: none; display: none;
+      mix-blend-mode: screen; z-index: 20;
+    }
+    #n { width: 1600px; }
+    #s { width: 2400px; }
+  </style>
+</head>
+<body>
+
+  <video id="v_src" autoplay playsinline></video>
+  <canvas id="out"></canvas>
+  <div class="darkness"></div>
+
+  <video id="n" class="fx" src="naruto.mp4" muted autoplay loop playsinline></video>
+  <video id="s" class="fx" src="sasuke.mp4" muted autoplay loop playsinline></video>
+
+  <script>
+    const vElement = document.getElementById('v_src');
+    const cElement = document.getElementById('out');
+    const ctx = cElement.getContext('2d');
+    const n = document.getElementById('n');
+    const s = document.getElementById('s');
+
+    // 💡 단일 나선환 게이지 및 위치 추적 변수
+    let rasenganPwr = 0;
+    let lastTx = 0.5;
+    let lastTy = 0.5;
+
+    function checkOpen(pts) {
+        let count = 0;
+        const wrist = pts[0];
+        const tips = [8, 12, 16, 20];
+        const pips = [6, 10, 14, 18];
+        for (let i = 0; i < tips.length; i++) {
+            const tip = pts[tips[i]];
+            const pip = pts[pips[i]];
+            if (Math.hypot(tip.x - wrist.x, tip.y - wrist.y) > Math.hypot(pip.x - wrist.x, pip.y - wrist.y)) count++;
+        }
+        return count >= 3;
+    }
+
+    function onResults(res) {
+        cElement.width = vElement.videoWidth;
+        cElement.height = vElement.videoHeight;
+        ctx.save();
+        ctx.clearRect(0, 0, cElement.width, cElement.height);
+
+        n.style.display = 'none';
+        s.style.display = 'none'; // 치도리는 사용 안 하므로 대기
+
+        // 1. 화면에 보이는 모든 손의 파란색 스켈레톤 기본 렌더링
+        if (res.multiHandLandmarks) {
+            res.multiHandLandmarks.forEach((pts) => {
+                ctx.save();
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = '#00fbff';
+                drawConnectors(ctx, pts, HAND_CONNECTIONS, {color: '#00d4ff', lineWidth: 3});
+                drawLandmarks(ctx, pts, {color: '#ffffff', lineWidth: 1, radius: 2});
+                ctx.restore();
+            });
+        }
+
+        // 2. 💡 핵심 로직: 화면에 손이 '두 개 이상' 감지되었을 때 작동
+        if (res.multiHandLandmarks && res.multiHandLandmarks.length >= 2) {
+            const h1 = res.multiHandLandmarks[0];
+            const h2 = res.multiHandLandmarks[1];
+
+            // 두 손이 모두 활짝 펼쳐져 있는지 확인
+            const open1 = checkOpen(h1);
+            const open2 = checkOpen(h2);
+
+            // 손바닥 중심(9번 관절: MCP) 기준 두 손 사이의 유클리드 거리 계산
+            const dist = Math.hypot(h1[9].x - h2[9].x, h1[9].y - h2[9].y);
+
+            // 조건: 두 손이 모두 열려있고, 거리가 가까울 때 (0.38은 사진 속 손 크기 기준 최적값)
+            if (open1 && open2 && dist < 0.38) {
+                if (rasenganPwr === 0) {
+                    n.currentTime = 0;
+                    n.play();
+                }
+                rasenganPwr += 0.06; // 나선환 차징 스피드
+            } else {
+                rasenganPwr -= 0.15; // 조건이 안 맞으면 빠르게 페이드아웃
+            }
+
+            // 두 손의 중심 좌표(Midpoint) 계산
+            lastTx = (h1[9].x + h2[9].x) / 2;
+            lastTy = (h1[9].y + h2[9].y) / 2;
+        } else {
+            // 손이 하나 이하로 떨어지면 에너지가 소멸합니다.
+            rasenganPwr -= 0.15;
+        }
+
+        // 게이지 범위 제한 (0 ~ 1)
+        rasenganPwr = Math.max(0, Math.min(1, rasenganPwr));
+
+        // 3. 💡 이펙트 노출: 게이지가 차오르면 두 손의 정중앙에 나선환 배치
+        if (rasenganPwr > 0.01) {
+            n.style.left = `${(1 - lastTx) * window.innerWidth}px`; // 거울모드 좌우 반전 반영
+            n.style.top = `${lastTy * window.innerHeight}px`;
+            n.style.display = 'block';
+            n.style.opacity = rasenganPwr; 
+        }
+
+        ctx.restore();
+    }
+
+    const h = new Hands({
+        locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
+    });
+
+    h.setOptions({
+        maxNumHands: 2, // 두 손 인식 필수
+        modelComplexity: 1,
+        minDetectionConfidence: 0.65,
+        minTrackingConfidence: 0.65
+    });
+
+    h.onResults(onResults);
+
+    const cam = new Camera(vElement, {
+        onFrame: async () => { await h.send({ image: vElement }); },
+        width: 1280, height: 720
+    });
+    cam.start();
+  </script>
+</body>
+</html>

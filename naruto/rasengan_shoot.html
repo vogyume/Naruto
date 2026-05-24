@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>naruto - Gesture Trigger Rasengan</title>
+  
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+
+  <style>
+    body { margin: 0; overflow: hidden; background-color: black; }
+    #v_src, #out {
+      position: absolute; top: 0; left: 0;
+      width: 100vw; height: 100vh;
+      object-fit: cover; transform: scaleX(-1);
+    }
+    #out { z-index: 2; pointer-events: none; }
+    .darkness {
+      position: absolute; top: 0; left: 0;
+      width: 100vw; height: 100vh;
+      background: rgba(10, 5, 0, 0.3);
+      mix-blend-mode: multiply; pointer-events: none; z-index: 5;
+    }
+    /* 날아가는 나선환의 스타일 */
+    .rasengan-projectile {
+      position: absolute; 
+      width: 1600px; height: auto;
+      transform: translate(-50%, -50%);
+      pointer-events: none; 
+      mix-blend-mode: screen; 
+      z-index: 20;
+    }
+  </style>
+</head>
+<body>
+
+  <video id="v_src" autoplay playsinline></video>
+  <canvas id="out"></canvas>
+  <div class="darkness"></div>
+
+  <video id="n_template" src="naruto.mp4" muted loop playsinline style="display:none;"></video>
+
+  <script>
+    const vElement = document.getElementById('v_src');
+    const cElement = document.getElementById('out');
+    const ctx = cElement.getContext('2d');
+    const nTemplate = document.getElementById('n_template');
+
+    // 날아가는 나선환들을 담을 배열
+    let projectiles = []; 
+
+    // 💡 왼손과 오른손의 상태를 독립적으로 관리하는 객체
+    let handStates = {
+      Left: { chargingPwr: 0, wasCharged: false, visualEl: null },
+      Right: { chargingPwr: 0, wasCharged: false, visualEl: null }
+    };
+
+    // 💡 [핵심] 손가락이 펴진 개수를 세는 함수
+    function countStraightFingers(pts) {
+        const wrist = pts[0];
+        const bases = [5, 9, 13, 17]; // 검지, 중지, 약지, 새끼손가락의 시작 관절
+        let straightCount = 0;
+
+        for (let i = 0; i < bases.length; i++) {
+            const pip = pts[bases[i] + 1]; // 중간 관절
+            const tip = pts[bases[i] + 3]; // 손가락 끝
+            
+            // 손가락 끝이 중간 관절보다 손목에서 더 멀리 있으면 '펴진 상태'로 인식
+            if (Math.hypot(tip.x - wrist.x, tip.y - wrist.y) > Math.hypot(pip.x - wrist.x, pip.y - wrist.y)) {
+                straightCount++;
+            }
+        }
+        return straightCount;
+    }
+
+    // 💡 나선환 발사 함수
+    function shootRasengan(startX, startY, speedX, speedY) {
+        const clone = nTemplate.cloneNode(true);
+        clone.className = 'rasengan-projectile';
+        clone.style.display = 'block';
+        document.body.appendChild(clone);
+        clone.play();
+
+        projectiles.push({
+            el: clone,
+            x: startX,
+            y: startY,
+            vx: speedX,
+            vy: speedY
+        });
+    }
+
+    function onResults(res) {
+        cElement.width = vElement.videoWidth;
+        cElement.height = vElement.videoHeight;
+        ctx.save();
+        ctx.clearRect(0, 0, cElement.width, cElement.height);
+
+        // 현재 화면에 나타난 손 체크용
+        let activeHands = { Left: false, Right: false };
+
+        // 1. 손 기본 스켈레톤 그리기
+        if (res.multiHandLandmarks && res.multiHandedness) {
+            for (let i = 0; i < res.multiHandLandmarks.length; i++) {
+                const pts = res.multiHandLandmarks[i];
+                const label = res.multiHandedness[i].label; // 'Left' 또는 'Right'
+                activeHands[label] = true;
+
+                ctx.save();
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = '#00fbff';
+                drawConnectors(ctx, pts, HAND_CONNECTIONS, {color: '#00d4ff', lineWidth: 3});
+                drawLandmarks(ctx, pts, {color: '#ffffff', lineWidth: 1, radius: 2});
+                ctx.restore();
+
+                // 2. 💡 제스처 인식 시작
+                const straightFingers = countStraightFingers(pts);
+                const state = handStates[label];
+
+                // 화면 기준 좌표 계산 (거울모드 반영)
+                const handX = (1 - pts[9].x) * window.innerWidth;
+                const handY = pts[9].y * window.innerHeight;
+                const wristX = (1 - pts[0].x) * window.innerWidth;
+                const wristY = pts[0].y * window.innerHeight;
+
+                // 상황 A: [사진 1] 처럼 손가락을 구부리고 있을 때 (펴진 손가락이 1개 이하) -> 충전!
+                if (straightFingers <= 1) {
+                    if (!state.visualEl) {
+                        state.visualEl = nTemplate.cloneNode(true);
+                        state.visualEl.className = 'rasengan-projectile';
+                        state.visualEl.style.display = 'block';
+                        document.body.appendChild(state.visualEl);
+                        state.visualEl.play();
+                    }
+                    state.chargingPwr = Math.min(1, state.chargingPwr + 0.05); // 게이지 상승
+                    state.visualEl.style.left = `${handX}px`;
+                    state.visualEl.style.top = `${handY}px`;
+                    state.visualEl.style.opacity = state.chargingPwr;
+
+                    if (state.chargingPwr > 0.4) {
+                        state.wasCharged = true; // 발사 대기 상태 활성화
+                    }
+                } 
+                // 상황 B: [사진 2] 처럼 손가락을 쫙 펼쳤을 때 (펴진 손가락이 3개 이상) -> 발사!
+                else if (straightFingers >= 3) {
+                    if (state.wasCharged) {
+                        // 💡 손목(pts[0])에서 손바닥 중심(pts[9])으로 향하는 방향 벡터 계산 (손이 가리키는 방향)
+                        const dirX = handX - wristX;
+                        const dirY = handY - wristY;
+                        const len = Math.hypot(dirX, dirY) || 1;
+
+                        // 손가락이 가리키는 방향으로 발사 속도(시속 25px) 설정
+                        const speed = 25;
+                        const vx = (dirX / len) * speed;
+                        const vy = (dirY / len) * speed;
+
+                        // 독립된 나선환 발사!
+                        shootRasengan(handX, handY, vx, vy);
+
+                        // 손 안의 충전 이펙트 초기화
+                        if (state.visualEl) { state.visualEl.remove(); state.visualEl = null; }
+                        state.chargingPwr = 0;
+                        state.wasCharged = false;
+                    } else {
+                        // 충전 안 하고 그냥 손만 펼치고 있으면 이펙트 소멸
+                        if (state.visualEl) { state.visualEl.remove(); state.visualEl = null; }
+                        state.chargingPwr = Math.max(0, state.chargingPwr - 0.1);
+                    }
+                }
+            }
+        }
+
+        // 화면에서 사라진 손의 충전 이펙트 제거
+        if (!activeHands.Left && handStates.Left.visualEl) { handStates.Left.visualEl.remove(); handStates.Left.visualEl = null; handStates.Left.wasCharged = false; handStates.Left.chargingPwr = 0;}
+        if (!activeHands.Right && handStates.Right.visualEl) { handStates.Right.visualEl.remove(); handStates.Right.visualEl = null; handStates.Right.wasCharged = false; handStates.Right.chargingPwr = 0;}
+
+        // 3. 이미 날아간 나선환들 위치 업데이트
+        for (let i = projectiles.length - 1; i >= 0; i--) {
+            const p = projectiles[i];
+            p.x += p.vx;
+            p.y += p.vy;
+            p.el.style.left = `${p.x}px`;
+            p.el.style.top = `${p.y}px`;
+
+            // 화면 밖 영역으로 완전히 벗어나면 삭제
+            if (p.x < -2000 || p.x > window.innerWidth + 2000 || p.y < -2000 || p.y > window.innerHeight + 2000) {
+                p.el.remove();
+                projectiles.splice(i, 1);
+            }
+        }
+
+        ctx.restore();
+    }
+
+    const h = new Hands({
+        locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
+    });
+
+    h.setOptions({
+        maxNumHands: 2,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.7,
+        minTrackingConfidence: 0.7
+    });
+
+    h.onResults(onResults);
+
+    const cam = new Camera(vElement, {
+        onFrame: async () => { await h.send({ image: vElement }); },
+        width: 1280, height: 720
+    });
+    cam.start();
+  </script>
+</body>
+</html>

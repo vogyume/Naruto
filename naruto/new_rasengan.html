@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>naruto - Absolute Full Screen Rasengan (Height 1.8x)</title>
+  
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+
+  <style>
+    body { margin: 0; overflow: hidden; background-color: black; }
+    #v_src, #out {
+      position: absolute; top: 0; left: 0;
+      width: 100vw; height: 100vh;
+      object-fit: cover; transform: scaleX(-1);
+    }
+    #out { z-index: 2; pointer-events: none; }
+    .darkness {
+      position: absolute; top: 0; left: 0;
+      width: 100vw; height: 100vh;
+      background: rgba(10, 5, 0, 0.3);
+      mix-blend-mode: multiply; pointer-events: none; z-index: 5;
+    }
+    .rasengan-projectile {
+      position: absolute; 
+      width: 1600px; height: auto;
+      transform: translate(-50%, -50%);
+      pointer-events: none; 
+      mix-blend-mode: screen; 
+      z-index: 20;
+    }
+    #blue-out-screen {
+      position: absolute; top: 0; left: 0;
+      width: 100vw; height: 100vh;
+      background: rgba(0, 110, 255, 1);
+      display: none;
+      pointer-events: none; 
+      z-index: 100;
+    }
+  </style>
+</head>
+<body>
+
+  <video id="v_src" autoplay playsinline></video>
+  <canvas id="out"></canvas>
+  <div class="darkness"></div>
+  <div id="blue-out-screen"></div>
+
+  <video id="n_template" src="naruto.mp4" muted loop playsinline style="display:none;"></video>
+
+  <script>
+    const vElement = document.getElementById('v_src');
+    const cElement = document.getElementById('out');
+    const ctx = cElement.getContext('2d');
+    const nTemplate = document.getElementById('n_template');
+    const blueOutScreen = document.getElementById('blue-out-screen');
+
+    let forwardRasengans = []; 
+    
+    let handStates = {
+      Left: { isShootingForward: false, chargingPwr: 0, wasCharged: false, visualEl: null },
+      Right: { isShootingForward: false, chargingPwr: 0, wasCharged: false, visualEl: null }
+    };
+
+    let blueOutFadeOutTimer = null;
+
+    function countStraightFingers(pts) {
+        const wrist = pts[0];
+        const bases = [5, 9, 13, 17]; 
+        let straightCount = 0;
+
+        for (let i = 0; i < bases.length; i++) {
+            const pip = pts[bases[i] + 1]; 
+            const tip = pts[bases[i] + 3]; 
+            if (Math.hypot(tip.x - wrist.x, tip.y - wrist.y) > Math.hypot(pip.x - wrist.x, pip.y - wrist.y)) {
+                straightCount++;
+            }
+        }
+        return straightCount;
+    }
+
+    function shootForwardRasengan(startX, startY) {
+        const clone = nTemplate.cloneNode(true);
+        clone.className = 'rasengan-projectile';
+        clone.style.display = 'block';
+        clone.style.width = '1000px'; 
+        clone.style.opacity = '1';
+        document.body.appendChild(clone);
+        clone.play();
+
+        forwardRasengans.push({
+            el: clone,
+            x: startX,
+            y: startY,
+            currentWidth: 1000
+        });
+    }
+
+    function onResults(res) {
+        cElement.width = vElement.videoWidth;
+        cElement.height = vElement.videoHeight;
+        ctx.save();
+        ctx.clearRect(0, 0, cElement.width, cElement.height);
+
+        let activeHands = { Left: false, Right: false };
+
+        if (res.multiHandLandmarks && res.multiHandedness) {
+            for (let i = 0; i < res.multiHandLandmarks.length; i++) {
+                const pts = res.multiHandLandmarks[i];
+                const label = res.multiHandedness[i].label; 
+                activeHands[label] = true;
+
+                ctx.save();
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = '#00fbff';
+                drawConnectors(ctx, pts, HAND_CONNECTIONS, {color: '#00d4ff', lineWidth: 3});
+                drawLandmarks(ctx, pts, {color: '#ffffff', lineWidth: 1, radius: 2});
+                ctx.restore();
+
+                const straightFingers = countStraightFingers(pts);
+                const state = handStates[label];
+                const handX = (1 - pts[9].x) * window.innerWidth;
+                const handY = pts[9].y * window.innerHeight;
+
+                if (straightFingers === 0 && !state.isShootingForward) {
+                    if (!state.visualEl) {
+                        state.visualEl = nTemplate.cloneNode(true);
+                        state.visualEl.className = 'rasengan-projectile';
+                        state.visualEl.style.display = 'block';
+                        document.body.appendChild(state.visualEl);
+                        state.visualEl.play();
+                    }
+                    state.chargingPwr = Math.min(1, state.chargingPwr + 0.06); 
+                    state.visualEl.style.left = `${handX}px`;
+                    state.visualEl.style.top = `${handY}px`;
+                    state.visualEl.style.width = '1000px'; 
+                    state.visualEl.style.opacity = state.chargingPwr;
+
+                    if (state.chargingPwr > 0.5) { state.wasCharged = true; }
+                } 
+                else if (straightFingers >= 3) {
+                    if (state.wasCharged) {
+                        state.isShootingForward = true;
+                        shootForwardRasengan(handX, handY); 
+                        if (state.visualEl) { state.visualEl.remove(); state.visualEl = null; }
+                        state.chargingPwr = 0;
+                        state.wasCharged = false;
+                    } else {
+                        if (state.visualEl) { state.visualEl.remove(); state.visualEl = null; }
+                        state.chargingPwr = Math.max(0, state.chargingPwr - 0.1);
+                    }
+                }
+            }
+        }
+
+        if (!activeHands.Left && handStates.Left.visualEl) { handStates.Left.visualEl.remove(); handStates.Left.visualEl = null; handStates.Left.wasCharged = false; }
+        if (!activeHands.Right && handStates.Right.visualEl) { handStates.Right.visualEl.remove(); handStates.Right.visualEl = null; handStates.Right.wasCharged = false; }
+
+        // 3. 날아가면서 서서히 팽창하는 나선환 처리
+        for (let i = forwardRasengans.length - 1; i >= 0; i--) {
+            const p = forwardRasengans[i];
+            
+            p.x += (window.innerWidth / 2 - p.x) * 0.08;
+            p.y += (window.innerHeight / 2 - p.y) * 0.08;
+            
+            // 시네마틱 슬로우 속도 유지
+            p.currentWidth = p.currentWidth * 1.01 + 2; 
+
+            p.el.style.left = `${p.x}px`;
+            p.el.style.top = `${p.y}px`;
+            p.el.style.width = `${p.currentWidth}px`;
+            
+            // 💡 [변경 완료] 기존 대각선 기준을 밀어버리고, 화면 세로 높이의 정확히 n배 크기가 될 때 터지도록 세팅!
+            const absoluteFullCoverageWidth = window.innerHeight * 6.0;
+
+            if (p.currentWidth > absoluteFullCoverageWidth) {
+                blueOutScreen.style.display = 'block';
+                blueOutScreen.style.opacity = '1';
+
+                p.el.remove();
+                forwardRasengans.splice(i, 1);
+
+                if (blueOutFadeOutTimer) clearTimeout(blueOutFadeOutTimer);
+                blueOutFadeOutTimer = setTimeout(() => {
+                    let opacity = 1;
+                    const fade = setInterval(() => {
+                        opacity -= 0.05; 
+                        blueOutScreen.style.opacity = `${opacity}`;
+                        if (opacity <= 0) {
+                            clearInterval(fade);
+                            blueOutScreen.style.display = 'none';
+                        }
+                    }, 40);
+                }, 250); 
+
+                handStates.Left.isShootingForward = false;
+                handStates.Right.isShootingForward = false;
+            }
+        }
+
+        ctx.restore();
+    }
+
+    const h = new Hands({
+        locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
+    });
+
+    h.setOptions({
+        maxNumHands: 2,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.7,
+        minTrackingConfidence: 0.7
+    });
+
+    h.onResults(onResults);
+
+    const cam = new Camera(vElement, {
+        onFrame: async () => { await h.send({ image: vElement }); },
+        width: 1280, height: 720
+    });
+    cam.start();
+  </script>
+</body>
+</html>
