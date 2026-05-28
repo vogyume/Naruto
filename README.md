@@ -1,5 +1,5 @@
 # Naruto
-naruto vs sasuke, it's real?
+naruto vs sasuke, is real?
 
 
 ## 🚀 Key Features & Demo Files
